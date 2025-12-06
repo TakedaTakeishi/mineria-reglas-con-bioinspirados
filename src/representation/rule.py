@@ -107,7 +107,13 @@ class RuleEncoder:
             order.append(target_name)
         
         variables_dict = self.metadata.get('variables', {})
-        return [variables_dict.get(name, {}) for name in order]
+        # Agregar el nombre de la variable al diccionario de info
+        result = []
+        for name in order:
+            var_info = variables_dict.get(name, {}).copy()  # Copiar para no modificar original
+            var_info['name'] = name  # Asegurar que el nombre esté presente
+            result.append(var_info)
+        return result
     
     def encode(self, rule: Rule) -> Tuple[str, str]:
         """

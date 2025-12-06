@@ -80,7 +80,7 @@
       "kappa": { "min": -1.0, "max": 1.0 }
     },
     "exclusions": {
-      "fixed_consequents": ["race", "gender", "age"],
+      "fixed_consequents": ["age"],
       "forbidden_pairs": [
         ["age:niños [0-10]", "bmi:bajo_peso [<18.5]"]
       ]

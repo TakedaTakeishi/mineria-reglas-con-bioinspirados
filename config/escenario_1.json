@@ -6,7 +6,7 @@
     "random_seed": 42,
     "output_root": "results"
   },
-  "use_sampling": true,
+  "use_sampling": false,
   "algorithm": {
     "generations": 150,
     "population_size": 50,
@@ -78,7 +78,7 @@
       "maxConf": { "min": 0.0, "max": 1.0 }
     },
     "exclusions": {
-      "fixed_consequents": ["gender"],
+      "fixed_consequents": ["age"],
       "forbidden_pairs": [
         ["age:niños [0-10]", "bmi:bajo_peso [<18.5]"]
       ]
