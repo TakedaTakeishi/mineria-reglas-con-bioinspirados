@@ -16,9 +16,120 @@
 
 **Para Máxima Calidad**: Usar **Mixed** (HV: 0.5385, pero 191s promedio - 11x más lento)
 
-**Descubrimiento Clave**: Crossover random n-point + población pequeña (50) + early stopping = **3-5x más diversidad** que el enfoque previo de 2 puntos fijos.
+**Descubrimiento Clave**: población pequeña (50) + early stopping = **3-5x más diversidad** que el enfoque previo.
 
 Ver [Estrategias de Mutación](#-estrategias-de-mutaci%C3%B3n) para comparación detallada.
+
+---
+
+## 🔄 Estrategia de Pregeneración de Reglas Válidas
+
+### Concepto y Motivación
+
+Este proyecto implementa una **estrategia de pregeneración masiva de reglas válidas** mediante fuerza bruta antes de ejecutar el algoritmo evolutivo. Esta técnica resuelve el problema crítico de validación costosa durante la evolución.
+
+### Proceso de Pregeneración
+
+#### 1. **Generación por Fuerza Bruta** (`src/sampling.py`)
+```python
+# Genera ~18,931 reglas válidas mediante:
+# - Enumeración exhaustiva de combinaciones de features
+# - Validación estricta (estructura + lógica de negocio)
+# - Cálculo anticipado de soportes
+# - Almacenamiento en data/sample/pregenerated_rules.json
+```
+
+**Parámetros de generación**:
+- **Espacio de búsqueda**: Todas las combinaciones posibles de features del dataset
+- **Restricciones aplicadas**: 
+  - 1-4 items en antecedente
+  - 1-2 items en consecuente
+  - Antecedente y consecuente disjuntos
+  - Reglas de negocio (fixed_consequents, forbidden_pairs)
+- **Tiempo de ejecución**: ~5-10 minutos una sola vez
+- **Resultado**: Pool de 18,931 reglas válidas garantizadas
+
+#### 2. **Ventajas de la Pregeneración**
+
+| Aspecto | Sin Pregeneración | Con Pregeneración |
+|---------|-------------------|-------------------|
+| **Validación durante evolución** | Costosa (10-100ms/regla) | O(1) lookup en pool |
+| **Tasa de éxito de mutación** | 10-30% (muchos rechazos) | 100% (siempre válidas) |
+| **Tiempo por generación** | 5-10s | 0.5-2s (5-10x más rápido) |
+| **Diversidad alcanzable** | Limitada (rechazos frecuentes) | Máxima (acceso completo al espacio) |
+| **Reproduciblidad** | Varía (estocástica) | Perfecta (pool fijo) |
+
+#### 3. **Uso en Operadores Genéticos**
+
+**Inicialización** (`ARMSampling`):
+```python
+# Muestrea del pool para crear población inicial
+# Bloom filter para O(1) detección de duplicados
+# Garantiza diversidad inicial máxima
+```
+
+**Mutación Fallback** (`FallbackMutation`):
+```python
+# Intenta mutación tradicional con timeout (2s)
+# Si falla o timeout → selecciona del pool pregenerado
+# Resultado: 100% tasa de éxito, máxima diversidad
+```
+
+**Mutación Guided** (`GuidedMutation`):
+```python
+# Recombina antecedentes/consecuentes del pool
+# Siempre produce reglas válidas (del espacio pregenerado)
+```
+
+#### 4. **Impacto en Resultados**
+
+La pregeneración es **clave** para los resultados superiores observados:
+
+- **Fallback Strategy**: Aprovecha el pool completo → 54 soluciones únicas (Escenario 1)
+- **Guided Strategy**: Recombina del pool → 17 soluciones únicas (Escenario 2)
+- **Exploración completa**: Acceso a todo el espacio válido sin costo computacional
+- **Sin deadlocks**: Elimina el problema de estancamiento por validación fallida
+
+#### 5. **Trade-offs y Consideraciones**
+
+**Ventajas**:
+- ✅ Velocidad de ejecución 5-10x mayor
+- ✅ Diversidad máxima alcanzable
+- ✅ Reproducibilidad perfecta
+- ✅ Elimina timeout/deadlock issues
+
+**Limitaciones**:
+- ⚠️ Requiere generación inicial (~5-10 min)
+- ⚠️ Espacio de memoria (~50MB para 18K reglas)
+- ⚠️ Limitado al espacio pregenerado (no descubre fuera del pool)
+- ⚠️ Sensible a cambios en dataset (requiere regeneración)
+
+**Cuándo regenerar el pool**:
+- Cambios en el dataset (`data/processed/`)
+- Modificación de restricciones de validación
+- Ajuste de cardinalidades (min/max items)
+- Cambio en reglas de negocio
+
+#### 6. **Archivos Relacionados**
+
+```
+data/sample/
+├── pregenerated_rules.json      # Pool de 18,931 reglas (roles + values)
+├── sample_data.csv              # Subset del dataset para testing rápido
+└── supports.json                # Soportes precalculados
+
+src/
+├── sampling.py                  # Generación del pool por fuerza bruta
+└── operators/
+    ├── sampling.py              # ARMSampling usa el pool
+    ├── fallback_mutation.py     # Fallback al pool en timeout
+    └── guided_mutation.py       # Recombinación desde el pool
+```
+
+**Regenerar pool**:
+```bash
+python src/sampling.py  # Genera nuevo pool desde dataset completo
+```
 
 ---
 
@@ -252,6 +363,9 @@ results/MOEAD_ARM_Diabetes_Scenario_1/exp_001/
 # Instalar dependencias
 pip install -r requirements.txt
 
+# Ejecutar en modo interactivo (por defecto)
+python main.py
+
 # Listar configuraciones disponibles
 python main.py list
 
@@ -265,10 +379,8 @@ python main.py validate escenario_1.json
 # o con ruta completa
 python main.py validate config/escenario_1.json
 
-# Ejecutar optimización (modo interactivo por defecto)
-python main.py run
-# o especificar config directamente
-python main.py run --config escenario_1.json
+# Ejecutar con config específica (sin interacción)
+python main.py run --config escenario_1.json --no-interactive
 # o deshabilitar generación de reporte
 python main.py run --config escenario_1.json --no-report
 ```
@@ -281,6 +393,27 @@ python -c "from orchestrator import Orchestrator; Orchestrator('config/escenario
 # Comparar estrategias de mutación
 python compare_quick.py              # Comparación rápida (30 gens)
 python compare_mutations_full.py     # Comparación exhaustiva (150 gens)
+```
+
+### Compatibilidad Multiplataforma
+
+**Windows, Mac y Linux**: El código es completamente multiplataforma.
+
+- ✅ Python 3.8+ (todas las plataformas)
+- ✅ Todas las dependencias son multiplataforma
+- ✅ Rutas de archivos usan `pathlib.Path`
+
+**Diferencias por sistema operativo**:
+```bash
+# Ver reporte de cobertura HTML
+# Windows:
+start htmlcov/index.html
+
+# Mac:
+open htmlcov/index.html
+
+# Linux:
+xdg-open htmlcov/index.html
 ```
 
 ---
@@ -338,94 +471,6 @@ python compare_mutations_full.py     # Comparación exhaustiva (150 gens)
 ├── orchestrator.py              # Orquestador de experimentos
 └── requirements.txt             # Dependencias
 ```
-
----
-
-## 🏗️ Características del Sistema
-
-### 1. Gestión de Configuración
-```python
-from src.core import Config
-
-# Cargar y validar configuración
-config = Config.from_json(
-    "config/escenario_1.json",
-    base_config_path="config/general/base_config.json"
-)
-
-# Acceder a campos tipados y validados
-print(config.algorithm.population_size)  # ¡Type-safe!
-print(config.objectives.selected)
-```
-
-### 2. Logging Estructurado
-```python
-from src.core import setup_logging, get_logger
-
-# Configurar una vez
-logger = setup_logging(
-    log_file="debug.log",
-    level="INFO",
-    json_logs=True  # Legible por máquina
-)
-
-# Usar en cualquier lugar
-logger.info("generation_complete", gen=42, hv=0.85, duplicates=10)
-# Output: {"event": "generation_complete", "gen": 42, "hv": 0.85, ...}
-```
-
-### 3. Hashing de Reglas (Deduplicación O(1))
-```python
-from src.representation import Rule
-
-# Crear reglas
-rule1 = Rule.from_items(
-    antecedent=[(0, 1), (1, 2)],
-    consequent=[(2, 0)]
-)
-
-# Hash criptográfico
-print(rule1.hash)  # Digest hexadecimal SHA256
-
-# Verificación de igualdad O(1)
-rule2 = Rule.from_items([(1, 2), (0, 1)], [(2, 0)])  # Orden diferente
-assert rule1 == rule2  # True (independiente del orden)
-
-# Usar en sets/dicts
-unique_rules = {rule1, rule2}  # Solo 1 elemento
-```
-
-### 4. Validadores SOLID
-```python
-from src.representation import (
-    Rule,
-    RuleStructureValidator,
-    BusinessRuleValidator,
-    CompositeValidator
-)
-
-# Validación de estructura
-structure_val = RuleStructureValidator(
-    min_antecedent_items=1,
-    max_antecedent_items=4
-)
-
-# Validación de lógica de negocio
-business_val = BusinessRuleValidator(
-    metadata=metadata,
-    fixed_consequents=["gender"],
-    forbidden_pairs=[["pregnant", "male"]]
-)
-
-# Componer validadores
-validator = CompositeValidator([structure_val, business_val])
-
-# Validar
-result = validator.validate(rule)
-if not result.is_valid:
-    print(f"Rechazada: {result.reason} | {result.details}")
-```
-
 ---
 
 ## 🧬 Estrategias de Mutación
@@ -762,8 +807,13 @@ pytest tests/unit/ -v
 # Ejecutar tests de integración
 pytest tests/integration/ -v
 
-# Ver reporte de cobertura
-open htmlcov/index.html  # En Windows: start htmlcov/index.html
+# Ver reporte de cobertura (comando según OS)
+# Windows:
+start htmlcov/index.html
+# Mac:
+open htmlcov/index.html
+# Linux:
+xdg-open htmlcov/index.html
 
 # Ejecutar tests con marcadores específicos
 pytest -m "not slow" -v  # Excluir tests lentos

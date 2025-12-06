@@ -352,6 +352,10 @@ def info():
 
 def main():
     """Entry point for CLI."""
+    # Si no hay argumentos, ejecutar modo interactivo por defecto
+    if len(sys.argv) == 1:
+        # Simular: python main.py run --interactive
+        sys.argv.extend(['run', '--interactive'])
     app()
 
 

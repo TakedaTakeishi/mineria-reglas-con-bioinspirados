@@ -3,9 +3,9 @@
 MOEA/D ARM Evolution - Modern CLI Entry Point.
 
 Uses Typer for command-line interface with Rich formatting.
-Legacy main.py remains for backward compatibility.
+Defaults to interactive mode when called without arguments.
 """
-from src.cli import app
+from src.cli.main_cli import main
 
 if __name__ == "__main__":
-    app()
+    main()
