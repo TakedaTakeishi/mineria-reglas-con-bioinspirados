@@ -113,7 +113,7 @@ class RuleIndividual(PymooIndividual):
             # Assign value if active
             if self.X[role_idx] != 0:
                 card = self.variables_info[i]['cardinality']
-                self.X[val_idx] = random.randint(0, card - 1)
+                self.X[val_idx] = np.random.randint(0, card)  # FIX: Usar np.random en lugar de random
             else:
                 self.X[val_idx] = 0
     

@@ -59,6 +59,12 @@ build/
 # data/processed/*.csv
 # data/raw/*.csv
 
+# ⚠️ CRITICAL: Estos archivos SON necesarios para reproducibilidad
+# NO excluir:
+# - data/processed/pregenerated/valid_rules_1m.csv  (pool de reglas)
+# - data/processed/diabetes_dataset/*.csv            (dataset procesado)
+# - data/processed/diabetes_dataset/*.json           (metadata, supports)
+
 # Temporary files
 *.tmp
 *.bak
