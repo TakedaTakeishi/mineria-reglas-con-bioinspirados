@@ -448,6 +448,7 @@ python compare_mutations_full.py     # Comparación exhaustiva (150 gens)
 - ✅ Python 3.8+ (todas las plataformas)
 - ✅ Todas las dependencias son multiplataforma
 - ✅ Rutas de archivos usan `pathlib.Path`
+- ✅ Matplotlib usa backend `Agg` (headless/server-safe)
 
 **Diferencias por sistema operativo**:
 ```bash
@@ -461,6 +462,12 @@ open htmlcov/index.html
 # Linux:
 xdg-open htmlcov/index.html
 ```
+
+**Nota para servidores Linux sin GUI**:
+- El programa funciona perfectamente en entornos headless (sin interfaz gráfica)
+- Las visualizaciones se generan como archivos PNG sin requerir X11/Wayland
+- Si encuentras errores de GTK/Qt, el backend `Agg` los evita automáticamente
+- Los resultados se guardan siempre en CSV independientemente de errores de visualización
 
 ---
 

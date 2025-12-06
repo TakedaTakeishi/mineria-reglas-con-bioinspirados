@@ -184,14 +184,22 @@ class Orchestrator:
         print(f"Best solutions found: {len(res.opt) if res.opt is not None else 0}")
         
         # Generate Visualizations
+        print("Generating visualizations...")
         try:
             from src.visualization import VisualizationManager
             viz = VisualizationManager(self.config, exp_dir)
             viz.generate_all()
+            print(f"✅ Visualizations saved successfully to {exp_dir}/plots/")
+        except ImportError as e:
+            print(f"⚠️  Warning: Could not import visualization module: {e}")
+            print("   Plots will not be generated. Install matplotlib if needed.")
         except Exception as e:
-            print(f"Warning: Visualization generation failed: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"⚠️  Warning: Visualization generation failed: {e}")
+            print("   This is non-critical. Results are still saved in CSV files.")
+            # Only show full traceback in debug mode
+            if self.config.get('debug', False):
+                import traceback
+                traceback.print_exc()
         
         return res
 

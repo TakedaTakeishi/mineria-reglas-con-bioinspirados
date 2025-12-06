@@ -1,5 +1,8 @@
 import os
 import pandas as pd
+import matplotlib
+# Force Agg backend BEFORE importing pyplot (headless/server-safe)
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
@@ -8,6 +11,8 @@ from pandas.plotting import parallel_coordinates
 class VisualizationManager:
     """
     Manages the generation of plots for the MOEA/D ARM algorithm.
+    
+    Uses matplotlib's Agg backend for headless/server environments.
     """
     def __init__(self, config, output_dir):
         self.config = config
