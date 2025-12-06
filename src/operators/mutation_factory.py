@@ -66,12 +66,22 @@ def create_mutation(
     
     elif mutation_type == "fallback":
         timeout = config.get('timeout', 2.0)
-        log.info("creating_fallback_mutation", prob=prob, timeout=timeout)
+        max_operations = config.get('max_operations', 500)
+        reproducible_mode = config.get('reproducible_mode', True)
+        log.info(
+            "creating_fallback_mutation",
+            prob=prob,
+            timeout=timeout,
+            max_operations=max_operations,
+            reproducible_mode=reproducible_mode
+        )
         return FallbackMutation(
             metadata=metadata,
             validator=validator,
             prob=prob,
-            timeout=timeout
+            timeout=timeout,
+            max_operations=max_operations,
+            reproducible_mode=reproducible_mode
         )
     
     else:  # "mixed" or default

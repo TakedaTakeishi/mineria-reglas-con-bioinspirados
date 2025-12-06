@@ -254,6 +254,52 @@ Todos los experimentos se configuran mediante archivos JSON en `config/`. Cada c
 }
 ```
 
+#### 5. **Reproducibilidad** (🆕 `mutation.reproducible_mode`)
+
+🚨 **IMPORTANTE**: Por defecto, el sistema opera en **modo reproducible** para garantizar resultados idénticos con el mismo `random_seed`.
+
+```json
+{
+  "mutation": {
+    "method": "fallback",
+    "reproducible_mode": true,    // ✅ Por defecto: 100% reproducible
+    "max_operations": 500,         // Límite de operaciones (modo reproducible)
+    "timeout": 2.0                 // Timeout en segundos (modo rápido)
+  }
+}
+```
+
+**Modos Disponibles**:
+
+| Modo | `reproducible_mode` | Métrica | Garantía | Velocidad | Uso |
+|------|---------------------|----------|-----------|-----------|-----|
+| **Reproducible** ✅ | `true` (defecto) | Cuenta operaciones de validación | Mismo seed = mismo resultado | Normal | **Producción/Papers** |
+| **Rápido** ⚡ | `false` | Usa tiempo real (wall-clock) | No determinista | ∼10% más rápido | Benchmarking exploratorio |
+
+**¿Por qué existe esto?**
+- Problema: Los timeouts basados en tiempo real (`time.time()`) varían con la carga del sistema
+- Solución: Modo reproducible cuenta **operaciones** en lugar de tiempo
+- Resultado: Mismo `random_seed` + mismo `max_operations` = resultados idénticos en cualquier máquina
+
+**Ajuste de `max_operations`**:
+- Valor por defecto: `500` (equivalente a ~2s en máquina estándar)
+- CPU lenta: aumentar a `800-1000` para explorar más
+- CPU rápida: reducir a `300-400` para acelerarmodificar
+- El sistema cuenta: decodificaciones, reparaciones, validaciones
+
+**Ejemplo - Desactivar reproducibilidad para benchmarks rápidos**:
+```json
+{
+  "mutation": {
+    "method": "fallback",
+    "reproducible_mode": false,  // ⚡ Modo rápido (no reproducible)
+    "timeout": 2.0
+  }
+}
+```
+
+> 📝 **Nota**: El sistema loggea el modo usado en `logs/moead.log` para trazabilidad.
+
 ---
 
 ### 📊 Estructura de Resultados
@@ -481,11 +527,13 @@ Este proyecto implementa **5 estrategias de mutación diferentes** para comparac
 
 | Estrategia | Tipo | Descripción | Mejor Para |
 |----------|------|-------------|----------|
-| **Fallback** 🏆 | Recombinación de Pool | Timeout rápido (2s) → muestreo de pool | **Diversidad** (30.0 prom, 54 max) |
+| **Fallback** 🏆 | Recombinación de Pool | Mutación con presupuesto de operaciones → muestreo de pool | **Diversidad** (30.0 prom, 54 max) |
 | **Mixed** | Multi-Operación | Todas las ops (extensión/contracción/reemplazo) | **Calidad** (HV: 0.5385, más lenta) |
 | **Conservative** ⭐ | Cambios Mínimos | Agregar/quitar/cambiar exactamente 1 item | **Balance** (13.5 diversidad, 7.4s) |
 | **Template** | Basada en Patrones | 50 patrones predefinidos, solo mutar valores | **Velocidad** (6.5s, 15.0 diversidad) |
 | **Guided** | Recombinación Inteligente | Intercambiar antecedente/consecuente de reglas válidas | **Consistencia** (13.5 prom, 11.7s) |
+
+> 🚨 **REPRODUCIBILIDAD**: Estrategia **Fallback** ahora usa modo reproducible por defecto (cuenta operaciones en lugar de tiempo). Ver sección de configuración para detalles.
 
 ### Resultados de Benchmark Exhaustivo (ACTUALIZADO Dic 2025)
 
@@ -539,7 +587,9 @@ Este proyecto implementa **5 estrategias de mutación diferentes** para comparac
   "mutation": {
     "method": "fallback",
     "probability": { "initial": 0.4, "min": 0.3, "max": 0.6 },
-    "timeout": 2.0
+    "reproducible_mode": true,   // ✅ Reproducible por defecto
+    "max_operations": 500,        // Presupuesto de operaciones
+    "timeout": 2.0                // Solo usado si reproducible_mode=false
   },
   "crossover": {
     "probability": { "initial": 0.7, "min": 0.5, "max": 0.8 }

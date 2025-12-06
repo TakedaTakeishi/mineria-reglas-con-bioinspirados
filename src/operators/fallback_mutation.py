@@ -36,7 +36,9 @@ class FallbackMutation(Mutation):
         validator,
         pool_path: str = "data/processed/pregenerated/valid_rules_1m.csv",
         prob: float = 0.7,
-        timeout: float = 5.0,  # Increased from 2s to 5s
+        timeout: float = 5.0,  # Usado solo si reproducible_mode=False
+        max_operations: int = 500,  # Presupuesto de operaciones para modo reproducible
+        reproducible_mode: bool = True,  # Por defecto reproducible
         **kwargs
     ):
         super().__init__()
@@ -45,6 +47,8 @@ class FallbackMutation(Mutation):
         self.pool_path = pool_path
         self.prob = prob
         self.timeout = timeout
+        self.max_operations = max_operations
+        self.reproducible_mode = reproducible_mode
         self.logger = get_logger(__name__)
         
         # Load pool
@@ -54,6 +58,10 @@ class FallbackMutation(Mutation):
         self.mutations_attempted = 0
         self.mutations_succeeded = 0
         self.fallbacks_used = 0
+        self.operations_used = 0  # Contador para modo reproducible
+        
+        mode = "reproducible (operations-based)" if reproducible_mode else f"fast (timeout={timeout}s)"
+        self.logger.info("fallback_mutation_initialized", mode=mode, max_operations=max_operations)
     
     def _load_pool(self):
         """Load valid rules pool for fallback."""
@@ -82,6 +90,76 @@ class FallbackMutation(Mutation):
         
         self.pool = np.array(self.pool)
         self.logger.info("fallback_pool_loaded", pool_size=len(self.pool))
+    
+    def _mutate_with_budget(self, X_i: np.ndarray, num_genes: int) -> Optional[np.ndarray]:
+        """
+        Try mutation with operation budget (reproducible mode).
+        
+        Args:
+            X_i: Input genome
+            num_genes: Number of genes
+            
+        Returns:
+            Mutated genome or None if budget exhausted
+        """
+        operations_used = 0
+        
+        while operations_used < self.max_operations:
+            # Simple mutation: change 1-2 items
+            Y_i = X_i.copy()
+            ind = RuleIndividual(self.metadata)
+            ind.X = Y_i
+            
+            # Random operation
+            roles = ind.X[:num_genes]
+            active = np.where(roles > 0)[0]
+            operations_used += 1
+            
+            if len(active) > 0 and np.random.random() < 0.5:
+                # Change value
+                pos = np.random.choice(active)
+                ind.X[pos + num_genes] = np.random.randint(
+                    0, _get_cardinality(self.metadata, pos)
+                )
+                operations_used += 1
+            else:
+                # Add/remove item
+                if np.random.random() < 0.5 and len(active) < num_genes:
+                    # Add
+                    ignored = np.where(roles == 0)[0]
+                    if len(ignored) > 0:
+                        pos = np.random.choice(ignored)
+                        ind.X[pos] = np.random.choice([1, 2])
+                        ind.X[pos + num_genes] = np.random.randint(
+                            0, _get_cardinality(self.metadata, pos)
+                        )
+                        operations_used += 2
+                elif len(active) > 1:
+                    # Remove
+                    pos = np.random.choice(active)
+                    ind.X[pos] = 0
+                    ind.X[pos + num_genes] = 0
+                    operations_used += 1
+            
+            ind.repair()
+            operations_used += 1  # Contar repair
+            
+            # Validate
+            try:
+                rule = ind.decode()
+                operations_used += 1  # Contar decode
+                if self.validator.is_valid(rule):
+                    operations_used += 1  # Contar validación
+                    self.operations_used += operations_used
+                    return ind.X
+                operations_used += 1  # Contar validación fallida
+            except:
+                operations_used += 1
+                pass
+        
+        # Budget agotado
+        self.operations_used += operations_used
+        return None
     
     def _mutate_with_timeout(self, X_i: np.ndarray, num_genes: int) -> Optional[np.ndarray]:
         """Try mutation with timeout."""
@@ -147,8 +225,11 @@ class FallbackMutation(Mutation):
             if np.random.random() < self.prob:
                 self.mutations_attempted += 1
                 
-                # Try mutation with timeout
-                result = self._mutate_with_timeout(X[i], num_genes)
+                # Try mutation según modo
+                if self.reproducible_mode:
+                    result = self._mutate_with_budget(X[i], num_genes)
+                else:
+                    result = self._mutate_with_timeout(X[i], num_genes)
                 
                 if result is not None:
                     Y[i] = result

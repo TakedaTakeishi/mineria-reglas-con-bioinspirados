@@ -46,6 +46,8 @@
         },
         "repair_attempts": 5,
         "duplicate_attempts": 5,
+        "reproducible_mode": true,
+        "max_operations": 500,
         "timeout": 2.0,
         "timeout_per_attempt": 10.0
       }
