@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 from pymoo.core.callback import Callback
 from pymoo.indicators.hv import HV
-from src.individual import Individual
+from src.representation import RuleIndividual
+from src.MOEAD import StuckRunDetected
 
 class ARMCallback(Callback):
     def __init__(self, config, logger, output_dir):
@@ -15,6 +16,15 @@ class ARMCallback(Callback):
         self.output_dir = output_dir
         self.interval = config['algorithm'].get('logging_interval', 10)
         self.objectives = config['objectives']['selected']
+        stuck_cfg = config['algorithm'].get('stuck_detection', {})
+        self.stuck_enabled = stuck_cfg.get('enabled', False)
+        self.stuck_window = stuck_cfg.get('window', 10)
+        self.stuck_min_new = stuck_cfg.get('min_new', 1)
+        self.stuck_hv_window = stuck_cfg.get('hv_window', self.stuck_window)
+        self.stuck_hv_tol = stuck_cfg.get('hv_tol', 1e-4)
+        self.hv_history = []
+        self.no_new_streak = 0
+        self.stuck_reason = None
         
         # Setup directories
         self.dirs = {
@@ -84,6 +94,43 @@ class ARMCallback(Callback):
         self.cumulative_discarded += current_discarded_count
         stats['total_discarded_cumulative'] = self.cumulative_discarded
         stats['discarded_this_interval'] = current_discarded_count
+
+        # Counters from algorithm (dedup diagnostics)
+        counters = getattr(algorithm, 'last_counters', {}) or {}
+        stats['new_replacements'] = counters.get('new', 0)
+        stats['skip_new_duplicates'] = counters.get('skip_new', 0)
+        stats['skip_pop_duplicates'] = counters.get('skip_pop', 0)
+
+        # Stuck detection (callback-level) combining replacements and HV plateau
+        if self.stuck_enabled:
+            new_count = stats['new_replacements']
+            if new_count < self.stuck_min_new:
+                self.no_new_streak += 1
+            else:
+                self.no_new_streak = 0
+
+            self.hv_history.append(hv_value)
+            hv_plateau = False
+            if len(self.hv_history) >= self.stuck_hv_window:
+                window_vals = self.hv_history[-self.stuck_hv_window:]
+                hv_plateau = (max(window_vals) - min(window_vals)) < self.stuck_hv_tol
+
+            if self.no_new_streak >= self.stuck_window or hv_plateau:
+                reason_parts = []
+                if self.no_new_streak >= self.stuck_window:
+                    reason_parts.append(f"{self.no_new_streak} gens sin nuevos (<{self.stuck_min_new})")
+                if hv_plateau:
+                    reason_parts.append(
+                        f"HV plano en ventana {self.stuck_hv_window} (Δ<{self.stuck_hv_tol})"
+                    )
+                self.stuck_reason = " | ".join(reason_parts)
+                msg = f"Stuck detection: {self.stuck_reason} @gen {gen}"
+                self.log.warning(msg)
+                print(msg)
+                if hasattr(algorithm, 'termination') and hasattr(algorithm.termination, 'force_termination'):
+                    algorithm.termination.force_termination = True
+                else:
+                    raise StuckRunDetected(msg)
             
         self.stats_history.append(stats)
         
@@ -131,7 +178,7 @@ class ARMCallback(Callback):
             # We need to create a temporary Individual to decode
             # This is slow but necessary for human-readable logs
             if problem:
-                temp_ind = Individual(problem.metadata)
+                temp_ind = RuleIndividual(problem.metadata)
                 temp_ind.X = X[i]
                 ant_str, con_str = temp_ind.decode_parts()
                 row['antecedent'] = ant_str

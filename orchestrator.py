@@ -4,7 +4,7 @@ import logging
 import pandas as pd
 from src.MOEAD import MOEAD_ARM
 from src.callback import ARMCallback
-from src.individual import Individual
+from src.representation import RuleIndividual
 from pymoo.indicators.hv import HV
 import numpy as np
 
@@ -112,6 +112,7 @@ class Orchestrator:
             counter += 1
         
         os.makedirs(exp_dir, exist_ok=True)
+        self.experiment_dir = exp_dir  # Store for external access
         print(f"Experiment Output Directory: {exp_dir}")
 
         # Configure debug logging to file and console for this run
@@ -218,7 +219,7 @@ class Orchestrator:
                 row[obj_name] = real_F[i, j]
                 
             # Decode Rule
-            temp_ind = Individual(problem.metadata)
+            temp_ind = RuleIndividual(problem.metadata)
             temp_ind.X = X[i]
             ant_str, con_str = temp_ind.decode_parts()
             row['antecedent'] = ant_str

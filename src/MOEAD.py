@@ -10,6 +10,9 @@ It integrates custom components:
 
 import numpy as np
 import math
+import logging
+import time
+from pathlib import Path
 from pymoo.algorithms.moo.moead import MOEAD
 from pymoo.core.problem import Problem
 from pymoo.util.ref_dirs import get_reference_directions
@@ -20,13 +23,13 @@ from pymoo.decomposition.tchebicheff import Tchebicheff as Tcheb
 from pymoo.decomposition.weighted_sum import WeightedSum as WS
 from pymoo.termination.default import DefaultMultiObjectiveTermination
 
-from src.individual import Individual
-from src.crossover import DiploidNPointCrossover
-from src.mutation import ARMMutation
+from src.representation import RuleIndividual
+from src.operators import DiploidNPointCrossover, ARMSampling, PregeneratedSampling
+from src.operators.mutation_factory import create_mutation
 from src.validator import ARMValidator
-from src.metrics import ARMMetrics
-from src.initialization import ARMSampling
+from src.metrics import MetricsFactory
 from src.loggers import DiscardedRulesLogger
+from src.optimization import AdaptiveControl, ProbabilityConfig, StuckDetector
 
 def get_H_from_N(N, M):
     """
@@ -48,30 +51,53 @@ def get_H_from_N(N, M):
 from pymoo.core.population import Population
 
 import sys
+from types import SimpleNamespace
+
+
+logger = logging.getLogger(__name__)
+
+
+class StuckRunDetected(Exception):
+    """Raised when the stuck detector decides to stop the run early."""
+    pass
 
 class AdaptiveMOEAD(MOEAD):
     """
-    Custom MOEA/D implementation that adapts mutation and crossover probabilities
-    based on the 1/5 success rule (Rechenberg).
+    Custom MOEA/D with adaptive probability control and stuck detection.
     """
-    def __init__(self, mutation_adapter_config, crossover_adapter_config, n_replace=2, prob_neighbor_mating=0.9, **kwargs):
+    def __init__(self, mutation_adapter_config, crossover_adapter_config, n_replace=2, prob_neighbor_mating=0.9, stuck_config=None, **kwargs):
         super().__init__(prob_neighbor_mating=prob_neighbor_mating, **kwargs)
-        self.mut_config = mutation_adapter_config
-        self.cx_config = crossover_adapter_config
+        
+        # Adaptive control for mutation/crossover probabilities
+        self.adaptive_control = AdaptiveControl(
+            mutation_config=ProbabilityConfig(
+                initial=mutation_adapter_config['initial'],
+                min_val=mutation_adapter_config['min'],
+                max_val=mutation_adapter_config['max']
+            ),
+            crossover_config=ProbabilityConfig(
+                initial=crossover_adapter_config['initial'],
+                min_val=crossover_adapter_config['min'],
+                max_val=crossover_adapter_config['max']
+            )
+        )
+        
+        # Stuck detection
+        stuck_cfg = stuck_config or {"enabled": False}
+        if stuck_cfg.get("enabled", False):
+            self.stuck_detector = StuckDetector(
+                max_runtime_minutes=stuck_cfg.get("max_runtime_minutes"),
+                window_size=stuck_cfg.get("window", 10),
+                min_new_per_window=stuck_cfg.get("min_new", 5),
+                hv_tolerance=stuck_cfg.get("hv_tol", 1e-6),
+                hv_period=stuck_cfg.get("hv_period", 20)
+            )
+        else:
+            self.stuck_detector = None
+        
         self.n_replace = n_replace
         self.prob_neighbor_mating = prob_neighbor_mating
         self.current_gen = 0
-        
-        # Mutation Config
-        self.mut_min = self.mut_config['min']
-        self.mut_max = self.mut_config['max']
-        
-        # Crossover Config
-        self.cx_min = self.cx_config['min']
-        self.cx_max = self.cx_config['max']
-        
-        # Stats
-        self.success_history = []
 
     def _infill(self):
         return None
@@ -82,6 +108,12 @@ class AdaptiveMOEAD(MOEAD):
     def _next(self):
         # 1. Snapshot current population (X) to detect changes
         old_X = self.pop.get("X").copy()
+        # Track signatures to block duplicates during this generation
+        sig_set = {tuple(x.flatten()) for x in old_X}
+        dup_skips = 0
+        curpop_dup_skips = 0
+        replacements_accepted = 0
+        self.last_counters = {"new": 0, "skip_new": 0, "skip_pop": 0}
         
         # 2. Manual MOEA/D Step (Bypassing pymoo generator)
         pop = self.pop
@@ -126,10 +158,17 @@ class AdaptiveMOEAD(MOEAD):
                 self.evaluator.eval(self.problem, off_pop)
                 off = off_pop[0]
 
+                # Deduplication guard: skip if already in current or new signatures
+                off_sig = tuple(off.X.flatten())
+                if off_sig in sig_set:
+                    dup_skips += 1
+                    continue
+
                 # Check for duplicates in current population
                 # This prevents the population from collapsing to a single individual
                 current_X = pop.get("X")
                 if np.any(np.all(current_X == off.X, axis=1)):
+                    curpop_dup_skips += 1
                     continue
                 
                 # e) Update Ideal Point
@@ -150,7 +189,20 @@ class AdaptiveMOEAD(MOEAD):
                 
                 for idx in improved_idx:
                     pop_idx = nbs[idx]
+                    # Final deduplication check against signature set
+                    replace_sig = tuple(off.X.flatten())
+                    if replace_sig in sig_set:
+                        continue
                     pop[pop_idx] = off
+                    sig_set.add(replace_sig)
+                    replacements_accepted += 1
+
+        # Expose per-generation counters for callbacks/diagnostics
+        self.last_counters = {
+            "new": replacements_accepted,
+            "skip_new": dup_skips,
+            "skip_pop": curpop_dup_skips,
+        }
         
         self.current_gen += 1
         
@@ -164,8 +216,11 @@ class AdaptiveMOEAD(MOEAD):
         sys.stdout.flush()
         if self.current_gen >= total_gen:
             print() # Newline at end
+        # Debug counters (lightweight)
+        sys.stdout.write(f' | new:{replacements_accepted} skip_new:{dup_skips} skip_pop:{curpop_dup_skips}')
+        sys.stdout.flush()
 
-        # 3. Calculate Success Rate (Replacements)
+        # 3. Calculate Success Rate and Adapt
         new_X = self.pop.get("X")
         
         # Count how many individuals changed
@@ -173,41 +228,27 @@ class AdaptiveMOEAD(MOEAD):
         changes_per_ind = np.sum(diffs, axis=1)
         n_replacements = np.sum(changes_per_ind > 0)
         
-        success_rate = n_replacements / len(self.pop)
-        self.success_history.append(success_rate)
+        # Record and adapt probabilities
+        self.adaptive_control.record_generation(n_replacements, len(self.pop))
+        new_mut_prob, new_cx_prob = self.adaptive_control.update_probabilities()
         
-        # 4. Adapt Probabilities (1/5 Rule)
-        # Target success rate is around 0.2 (1/5)
+        # Update operator probabilities
+        self.mating.mutation.prob = new_mut_prob
+        self.mating.crossover.prob = new_cx_prob
         
-        # Factor c = 0.9 (decrease) and 1.11 (increase)
-        c = 0.9 
-        
-        # --- Adapt Mutation ---
-        current_mut_prob = self.mating.mutation.prob
-        if success_rate > 0.2:
-            new_mut_prob = current_mut_prob / c # Increase exploration
-        elif success_rate < 0.2:
-            new_mut_prob = current_mut_prob * c # Decrease exploration
-        else:
-            new_mut_prob = current_mut_prob
-        self.mating.mutation.prob = max(self.mut_min, min(self.mut_max, new_mut_prob))
-        
-        # --- Adapt Crossover ---
-        # Logic: If success is high, we can afford more disruption (higher crossover).
-        # If success is low, we might want to be more conservative or disruptive depending on strategy.
-        # Standard 1/5 rule usually applies to step size (mutation).
-        # For crossover, often high success -> keep high crossover to mix good blocks.
-        # Low success -> maybe reduce crossover to avoid breaking good blocks?
-        # Let's apply same logic: High success (>0.2) -> Increase Crossover.
-        
-        current_cx_prob = self.mating.crossover.prob
-        if success_rate > 0.2:
-            new_cx_prob = current_cx_prob / c
-        elif success_rate < 0.2:
-            new_cx_prob = current_cx_prob * c
-        else:
-            new_cx_prob = current_cx_prob
-        self.mating.crossover.prob = max(self.cx_min, min(self.cx_max, new_cx_prob))
+        # Record for stuck detection
+        if self.stuck_detector:
+            self.stuck_detector.record_generation(replacements_accepted, None)
+            
+            # Check if stuck
+            try:
+                self.stuck_detector.raise_if_stuck(self.current_gen)
+            except Exception as e:
+                logger.warning(f"Stuck detected: {e}")
+                if hasattr(self, "termination") and hasattr(self.termination, "force_termination"):
+                    self.termination.force_termination = True
+                else:
+                    raise
 
 
 class ARMProblem(Problem):
@@ -220,7 +261,7 @@ class ARMProblem(Problem):
         self.logger = logger
         
         # Determine number of genes from metadata
-        dummy = Individual(metadata=metadata)
+        dummy = RuleIndividual(metadata=metadata)
         self.n_var = 2 * dummy.num_genes
         
         self.validator = validator
@@ -241,7 +282,7 @@ class ARMProblem(Problem):
             ind_genome = x[i]
             
             # Extract rule items using temp individual
-            temp_ind = Individual(self.metadata)
+            temp_ind = RuleIndividual(self.metadata)
             temp_ind.X = ind_genome
             ant, con = temp_ind.get_rule_items()
             
@@ -287,8 +328,12 @@ class MOEAD_ARM:
         self.config = config
         self.data = data_context # Dict with df, supports, metadata
         
-        # Initialize Components
-        self.metrics = ARMMetrics(
+        # Determine scenario from config
+        scenario = self.config['experiment'].get('scenario', 'scenario_1')
+        
+        # Initialize Components with MetricsFactory
+        self.metrics = MetricsFactory.create_metrics(
+            scenario_name=scenario,
             dataframe=self.data['df'],
             supports_dict=self.data['supports'],
             metadata=self.data['metadata']
@@ -327,29 +372,39 @@ class MOEAD_ARM:
         print(f"Initialized MOEA/D with {actual_pop_size} reference directions (Target: {target_pop_size})")
         
         # Operators
-        # Get max attempts from config or default to 10000
-        max_init_attempts = alg_config.get('initialization', {}).get('max_attempts', 10000)
+        # Check if pregenerated rules file exists
+        pregenerated_path = Path("data/processed/pregenerated/valid_rules_1m.csv")
         
-        sampling = ARMSampling(
-            metadata=self.data['metadata'],
-            validator=self.validator,
-            logger=self.logger,
-            max_attempts=max_init_attempts
-        )
+        if pregenerated_path.exists():
+            print(f"✓ Using pregenerated rules from {pregenerated_path}")
+            sampling = PregeneratedSampling(
+                metadata=self.data['metadata'],
+                csv_path=str(pregenerated_path),
+                allow_duplicates=True  # Allow if needed for large populations
+            )
+        else:
+            print(f"⚠ Pregenerated rules not found, using random initialization (slower)")
+            max_init_attempts = alg_config.get('initialization', {}).get('max_attempts', 10000)
+            sampling = ARMSampling(
+                metadata=self.data['metadata'],
+                validator=self.validator,
+                logger=self.logger,
+                max_attempts=max_init_attempts
+            )
         
         crossover = DiploidNPointCrossover(
             prob=alg_config['operators']['crossover']['probability']['initial'],
             n_points=2
         )
         
-        mutation = ARMMutation(
+        # Create mutation using factory
+        mutation_type = alg_config['operators']['mutation'].get('method', 'mixed')
+        mutation = create_mutation(
+            mutation_type=mutation_type,
             metadata=self.data['metadata'],
             validator=self.validator,
             logger=self.logger,
-            prob=alg_config['operators']['mutation']['probability']['initial'],
-            attempts=alg_config['operators']['mutation']['repair_attempts'],
-            duplicate_attempts=alg_config['operators']['mutation'].get('duplicate_attempts', 0),
-            active_ops=alg_config['operators']['mutation'].get('active_ops', ['extension', 'contraction', 'replacement'])
+            config=alg_config['operators']['mutation']
         )
         
         # Decomposition Method
@@ -378,7 +433,8 @@ class MOEAD_ARM:
             prob_neighbor_mating=alg_config['neighborhood']['selection_probability'],
             sampling=sampling,
             crossover=crossover,
-            mutation=mutation
+            mutation=mutation,
+            stuck_config=alg_config.get('stuck_detection')
         )
         
         # Termination Criterion
@@ -399,14 +455,24 @@ class MOEAD_ARM:
             termination = ('n_gen', n_gen)
 
         # Execution
-        res = minimize(
-            self.problem,
-            algorithm,
-            termination,
-            seed=self.config['experiment']['random_seed'],
-            callback=callback,
-            verbose=False
-        )
+        try:
+            res = minimize(
+                self.problem,
+                algorithm,
+                termination,
+                seed=self.config['experiment']['random_seed'],
+                callback=callback,
+                verbose=False
+            )
+        except StuckRunDetected as e:
+            logger.warning("Optimization stopped by stuck detector: %s", e)
+            print(f"Optimization stopped by stuck detector: {e}")
+            current_opt = algorithm.opt if hasattr(algorithm, 'opt') and algorithm.opt is not None else algorithm.pop
+            res = SimpleNamespace(opt=current_opt)
+        except Exception as e:
+            logger.exception("Optimization aborted by unexpected error: %s", e)
+            print(f"Optimization aborted by unexpected error: {e}")
+            raise
         
         return res
 

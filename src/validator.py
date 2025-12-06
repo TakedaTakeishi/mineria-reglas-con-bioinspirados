@@ -18,9 +18,15 @@ class ARMValidator:
         self.thresholds = self.constraints.get('metric_thresholds', {})
         self.exclusions = self.constraints.get('exclusions', {})
 
-        # Alias map to keep configs backward-compatible (e.g., "kappa" -> "k_measure")
+        # Alias map to keep configs backward-compatible
+        # Scenario 1 aliases
         self.alias_map = {
-            'kappa': 'k_measure'
+            'casual-supp': 'casual_support',
+            'casual-conf': 'casual_confidence',
+            'maxConf': 'max_conf',
+            # Scenario 2 aliases
+            'kappa': 'k_measure',
+            'phi': 'phi_coefficient'
         }
         
         # Cache variable names for fast lookup
