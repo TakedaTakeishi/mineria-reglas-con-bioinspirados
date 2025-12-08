@@ -18,20 +18,31 @@ python main.py run --config escenario_1.json --no-report
 
 # Testing & Validation
 make test         # pytest with coverage (152 tests)
-make validate     # Quick refactoring checks
+make validate     # Quick refactoring checks (runs validate_refactoring.py)
 make check        # Full suite (validate + lint + test)
 make clean        # Remove generated files
 
-# Benchmarking mutations
-python compare_quick.py              # Fast comparison (30 gens, 4 strategies, ~5min)
-python compare_mutations_full.py     # Exhaustive (150 gens, 5 strategies, ~40min)
+# Windows PowerShell (if make unavailable)
+pytest tests/ -v --cov=src --cov-report=html --cov-report=term  # Run tests
+python validate_refactoring.py                                   # Quick validation
+python temp/validate_phase4.py                                   # Phase 4 checks
+
+# Benchmarking mutations (in temp/ folder)
+python temp/compare_quick.py              # Fast comparison (30 gens, 4 strategies, ~5min)
+python temp/compare_mutations_full.py     # Exhaustive (150 gens, 5 strategies, ~40min)
+
+# Diagnostic scripts (temp/ folder - for debugging)
+python temp/diagnose_reproducibility.py   # Check seed consistency, file hashes, determinism
+python temp/test_quick_reproducibility.py # Fast reproducibility test (3 runs)
+python temp/check_moead_attrs.py          # Verify MOEAD algorithm attributes
 ```
 
 ### Architecture: Coexistence Model
 - **Legacy** (`src/*.py`): individual.py, MOEAD.py, mutation.py, metrics.py, validator.py, callback.py, visualization.py, loggers.py
 - **Refactored** (`src/core/`, `src/representation/`, `src/operators/`, `src/optimization/`, `src/metrics/`, `src/statistics/`, `src/cli/`): Pydantic config, structlog, SHA256 rules, SOLID validators, metrics factory, CLI
 - **Import pattern**: `from src.representation import Rule` (new) vs `from src.individual import Individual` (legacy)
-- **Data pipeline**: `src/preprocessing.py` → `src/calculate_supports.py` → `src/sampling.py` (optional)
+- **Data pipeline**: `src/preprocessing.py` → `src/calculate_supports.py` → `src/sampling.py` (optional pregeneration)
+- **Temp utilities** (`temp/`): Diagnostic scripts, benchmark comparisons, migration docs (MIGRATION.md, PHASE*_SUMMARY.md, TROUBLESHOOTING.md)
 
 ### Execution Flow (Orchestrator Pattern)
 ```
@@ -142,7 +153,14 @@ MetricsFactory.create_metrics(
 
 **Structlog** (`logs/moead.log`):
 - JSON-structured logs with context binding: `bind_context(generation=N, individual_id=X)`
-- Search for errors: `grep '"level":"error"' logs/moead.log | jq`
+- Search for errors: `grep '"level":"error"' logs/moead.log | jq` (Linux/Mac) or `Select-String -Path logs/moead.log -Pattern '"level":"error"'` (PowerShell)
+
+**Diagnostic tools** (`temp/` folder):
+- `diagnose_reproducibility.py`: Comprehensive check of seeds, file hashes, sampling determinism
+- `test_quick_reproducibility.py`: Fast 3-run reproducibility test
+- `check_moead_attrs.py`: Verify MOEAD algorithm has required attributes for adaptive operators
+- `compare_quick.py` / `compare_mutations_full.py`: Benchmark mutation strategies side-by-side
+- Migration docs: `MIGRATION.md`, `PHASE*_SUMMARY.md`, `TROUBLESHOOTING.md` for historical context
 
 ### When Modifying
 **Always call `repair()` after genome edits**:

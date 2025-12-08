@@ -139,20 +139,27 @@ class ARMValidator:
         """
         Checks against 'exclusions' in config.
         Supported exclusions:
-        - 'fixed_consequents': Variables that cannot be in consequent (e.g., 'race')
+        - 'fixed_antecedents': Variables that cannot be in antecedent (e.g., 'diabetes')
+        - 'fixed_consequents': Variables that cannot be in consequent (e.g., 'age')
         - 'forbidden_pairs': Pairs of variables that cannot coexist in a rule
         """
         # Map indices to names for config comparison
         vars_X_names = set(self.var_names[x[0]] for x in antecedent)
         vars_Y_names = set(self.var_names[y[0]] for y in consequent)
         
-        # 1. Fixed Consequents (Immutable variables shouldn't be predicted)
-        # Example: You can't cause "Race" or "Sex"
+        # 1. Fixed Antecedents (Variables that cannot be in antecedent)
+        # Example: "diabetes" should not be used to predict other variables
+        forbidden_antecedents = set(self.exclusions.get('fixed_antecedents', []))
+        if not vars_X_names.isdisjoint(forbidden_antecedents):
+            return False
+        
+        # 2. Fixed Consequents (Variables that cannot be in consequent)
+        # Example: "age" cannot be predicted
         forbidden_targets = set(self.exclusions.get('fixed_consequents', []))
         if not vars_Y_names.isdisjoint(forbidden_targets):
             return False
 
-        # 2. Forbidden Pairs (Logic check)
+        # 3. Forbidden Pairs (Logic check)
         # Example: "Pregnant" and "Male" should not appear in the same rule (X or Y)
         forbidden_pairs = self.exclusions.get('forbidden_pairs', [])
         all_vars = vars_X_names.union(vars_Y_names)

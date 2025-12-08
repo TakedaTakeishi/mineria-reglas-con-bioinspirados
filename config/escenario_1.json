@@ -8,8 +8,8 @@
   },
   "use_sampling": false,
   "algorithm": {
-    "generations": 150,
-    "population_size": 50,
+    "generations": 300,
+    "population_size": 100,
     "logging_interval": 5,
     "termination": {
       "enabled": true,
@@ -17,11 +17,12 @@
       "period": 30
     },
     "initialization": {
+      "use_pregenerated": false,
       "max_attempts": 5000
     },
     "decomposition": {
-      "method": "tchebycheff",
-      "params": {}
+      "method": "pbi",
+      "params": { "theta": 5.0 }
     },
     "neighborhood": {
       "size": 3,
@@ -31,18 +32,18 @@
     "operators": {
       "crossover": {
         "probability": {
-          "initial": 0.7,
-          "min": 0.5,
+          "initial": 0.3,
+          "min": 0.3,
           "max": 0.8
         }
       },
       "mutation": {
-        "method": "fallback",
+        "method": "conservative",
         "active_ops": ["extension", "contraction", "replacement"],
         "probability": {
-          "initial": 0.4,
+          "initial": 0.3,
           "min": 0.3,
-          "max": 0.6
+          "max": 0.8
         },
         "repair_attempts": 5,
         "duplicate_attempts": 5,
@@ -71,8 +72,8 @@
     "rule_validity": {
       "min_antecedent_items": 1,
       "min_consequent_items": 1,
-      "max_antecedent_items": 4,
-      "max_consequent_items": 2
+      "max_antecedent_items": 11,
+      "max_consequent_items": 11
     },
     "metric_thresholds": {
       "casual-supp": { "min": 0.0, "max": 2.0 },
@@ -80,9 +81,30 @@
       "maxConf": { "min": 0.0, "max": 1.0 }
     },
     "exclusions": {
-      "fixed_consequents": ["age"],
+      "fixed_antecedents": ["diabetes"],
+      "fixed_consequents": ["age", "bmi"],
       "forbidden_pairs": [
-        ["age:niños [0-10]", "bmi:bajo_peso [<18.5]"]
+        ["age", "bmi"],
+        ["blood_glucose_level", "diabetes"],
+        ["age", "blood_glucose_level"], 
+        ["age", "gender"],
+        ["gender", "diabetes"],
+        ["hbA1c_level", "diabetes"],
+        ["age", "smoking_history"],
+        ["gender", "smoking_history"],
+        ["age", "diabetes"],
+        ["smoking_history", "bmi"],
+        ["smoking_history", "blood_glucose_level"],
+        ["smoking_history", "diabetes"],
+        ["age", "diabetes"],
+        ["blood_glucose_level", "hbA1c_level"],
+        ["bmi", "blood_glucose_level"],
+        ["age", "hbA1c_level"],
+        ["bmi", "diabetes"],
+        ["race", "diabetes"],
+        ["gender", "blood_glucose_level"],
+        ["gender", "bmi"],
+        ["smoking_history", "hbA1c_level"]
       ]
     }
   }

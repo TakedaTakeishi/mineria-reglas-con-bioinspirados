@@ -266,12 +266,54 @@ class ARMProblem(Problem):
         
         self.validator = validator
         self.metrics = metrics
+        
+        # Metric normalization ranges (min, max) for each metric
+        # This ensures all objectives are in [0, 1] scale before negation
+        self.metric_ranges = {
+            # Scenario 1 - Casual ARM
+            'casual-supp': (0.0, 1.0),
+            'casual-conf': (0.0, 1.0),
+            'maxConf': (0.0, 1.0),
+            # Scenario 2 - Correlation
+            'jaccard': (0.0, 1.0),
+            'cosine': (0.0, 1.0),
+            'phi': (-1.0, 1.0),  # Range is [-1, 1], needs normalization
+            'kappa': (-1.0, 1.0),  # Range is [-1, 1], needs normalization
+            'k_measure': (-1.0, 1.0),  # Alias for kappa
+            'phi_coefficient': (-1.0, 1.0),  # Alias for phi
+        }
 
         super().__init__(n_var=self.n_var, 
                          n_obj=self.n_obj, 
                          n_ieq_constr=0, 
                          xl=0, 
                          xu=1) # Bounds not strictly used for custom sampling/mutation
+    
+    def _normalize_metric(self, value: float, metric_name: str) -> float:
+        """
+        Normalize metric value to [0, 1] range.
+        
+        Args:
+            value: Raw metric value
+            metric_name: Name of the metric
+        
+        Returns:
+            Normalized value in [0, 1]
+        """
+        if metric_name not in self.metric_ranges:
+            # Unknown metric, assume [0, 1]
+            return value
+        
+        min_val, max_val = self.metric_ranges[metric_name]
+        
+        # Normalize to [0, 1]
+        if max_val == min_val:
+            return 0.5  # Avoid division by zero
+        
+        normalized = (value - min_val) / (max_val - min_val)
+        
+        # Clamp to [0, 1] to handle edge cases
+        return max(0.0, min(1.0, normalized))
 
     def _evaluate(self, x, out, *args, **kwargs):
         # x shape: (n_pop, n_var)
@@ -305,16 +347,20 @@ class ARMProblem(Problem):
             # get_metrics returns (values_list, errors_dict)
             vals, errors = self.metrics.get_metrics(ant, con, self.objectives)
             
-            # Extract objectives
+            # Extract and normalize objectives
             obj_values = []
-            for val in vals:
+            for metric_name, val in zip(self.objectives, vals):
                 if val is None:
                     # Penalty for undefined metric
                     obj_values.append(2.0) 
                 else:
-                    # MOEA/D minimizes. If we want to maximize (e.g. Confidence), we negate.
-                    # Assuming all ARM metrics are "higher is better".
-                    obj_values.append(-val)
+                    # Normalize to [0, 1] to ensure all metrics are on the same scale
+                    # This is CRITICAL for PBI decomposition to work correctly
+                    normalized = self._normalize_metric(val, metric_name)
+                    
+                    # Negate for minimization (pymoo minimizes by default)
+                    # Higher metric value → lower objective value → better solution
+                    obj_values.append(-normalized)
                 
             F[i, :] = obj_values
         
@@ -372,10 +418,12 @@ class MOEAD_ARM:
         print(f"Initialized MOEA/D with {actual_pop_size} reference directions (Target: {target_pop_size})")
         
         # Operators
-        # Check if pregenerated rules file exists
+        # Check configuration for initialization method
+        init_config = alg_config.get('initialization', {})
+        use_pregenerated = init_config.get('use_pregenerated', True)  # Default: True
         pregenerated_path = Path("data/processed/pregenerated/valid_rules_1m.csv")
         
-        if pregenerated_path.exists():
+        if use_pregenerated and pregenerated_path.exists():
             print(f"✓ Using pregenerated rules from {pregenerated_path}")
             sampling = PregeneratedSampling(
                 metadata=self.data['metadata'],
@@ -383,8 +431,10 @@ class MOEAD_ARM:
                 allow_duplicates=True  # Allow if needed for large populations
             )
         else:
-            print(f"⚠ Pregenerated rules not found, using random initialization (slower)")
-            max_init_attempts = alg_config.get('initialization', {}).get('max_attempts', 10000)
+            if use_pregenerated:
+                print(f"⚠ Pregenerated rules not found at {pregenerated_path}")
+            print(f"→ Using random initialization (slower but more exploratory)")
+            max_init_attempts = init_config.get('max_attempts', 10000)
             sampling = ARMSampling(
                 metadata=self.data['metadata'],
                 validator=self.validator,

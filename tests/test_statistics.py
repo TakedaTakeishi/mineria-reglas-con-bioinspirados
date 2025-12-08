@@ -4,7 +4,7 @@ Tests HV computation, plateau detection, diversity metrics, convergence.
 """
 import pytest
 import numpy as np
-from src.statistics import HypervolumeTracker, PopulationStats, ConvergenceMetrics, ParetoFrontAnalyzer
+from src.stats_modules import HypervolumeTracker, PopulationStats, ConvergenceMetrics, ParetoFrontAnalyzer
 
 
 class TestHypervolumeTracker:

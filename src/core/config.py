@@ -100,6 +100,7 @@ class InitializationConfig(BaseModel):
     """Population initialization settings."""
     max_attempts: int = Field(ge=100, default=10000)
     timeout_seconds: float = Field(ge=1.0, default=300.0)
+    use_pregenerated: bool = Field(default=True, description="Use pregenerated pool for initialization (True) or random generation (False)")
 
 
 class AlgorithmConfig(BaseModel):
@@ -131,6 +132,7 @@ class RuleValidityConfig(BaseModel):
 
 class ExclusionsConfig(BaseModel):
     """Business logic exclusions."""
+    fixed_antecedents: List[str] = Field(default_factory=list)
     fixed_consequents: List[str] = Field(default_factory=list)
     forbidden_pairs: List[List[str]] = Field(default_factory=list)
 

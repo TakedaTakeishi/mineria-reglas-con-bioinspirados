@@ -128,6 +128,7 @@ class BusinessRuleValidator:
     def __init__(
         self,
         metadata: Dict[str, Any],
+        fixed_antecedents: Optional[List[str]] = None,
         fixed_consequents: Optional[List[str]] = None,
         forbidden_pairs: Optional[List[List[str]]] = None
     ):
@@ -136,10 +137,12 @@ class BusinessRuleValidator:
         
         Args:
             metadata: Dataset metadata with variable mapping
+            fixed_antecedents: Variables that cannot be in antecedent
             fixed_consequents: Variables that cannot be in consequent
             forbidden_pairs: Pairs of variables that cannot coexist
         """
         self.metadata = metadata
+        self.fixed_antecedents = set(fixed_antecedents or [])
         self.fixed_consequents = set(fixed_consequents or [])
         self.forbidden_pairs = [set(pair) for pair in (forbidden_pairs or [])]
         
@@ -175,7 +178,16 @@ class BusinessRuleValidator:
         ant_var_names = {self.var_names[idx] for idx in ant_var_indices if idx < len(self.var_names)}
         con_var_names = {self.var_names[idx] for idx in con_var_indices if idx < len(self.var_names)}
         
-        # Check 1: Fixed consequents
+        # Check 1: Fixed antecedents (variables that cannot be in antecedent)
+        if not ant_var_names.isdisjoint(self.fixed_antecedents):
+            forbidden = ant_var_names & self.fixed_antecedents
+            return ValidationResult(
+                is_valid=False,
+                reason="fixed_antecedent_violation",
+                details={"forbidden_variables": sorted(forbidden)}
+            )
+        
+        # Check 2: Fixed consequents (variables that cannot be in consequent)
         if not con_var_names.isdisjoint(self.fixed_consequents):
             forbidden = con_var_names & self.fixed_consequents
             return ValidationResult(
@@ -184,7 +196,7 @@ class BusinessRuleValidator:
                 details={"forbidden_variables": sorted(forbidden)}
             )
         
-        # Check 2: Forbidden pairs
+        # Check 3: Forbidden pairs
         all_var_names = ant_var_names | con_var_names
         for forbidden_pair in self.forbidden_pairs:
             if forbidden_pair.issubset(all_var_names):
