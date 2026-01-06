@@ -43,8 +43,8 @@ console = Console()
 PRIME_SEEDS = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
 DEBUG_SEEDS = [2, 3, 5]  # Only 3 seeds for debug mode
 
-# Generations to report (at these checkpoints)
-REPORT_GENERATIONS = [50, 100, 150, 200, 300]
+# Report every N generations (then skip to end when values stabilize)
+REPORT_INTERVAL = 5
 
 
 class BenchmarkRunner:
@@ -130,11 +130,11 @@ class BenchmarkRunner:
                     
                 except Exception as e:
                     self.logger.error(f"Failed seed {seed}: {e}", exc_info=True)
-                    console.print(f"[red]❌ Seed {seed} failed: {e}[/red]")
+                    console.print(f"[red][FAIL] Seed {seed} failed: {e}[/red]")
                 
                 progress.advance(task)
         
-        console.print(f"\n[bold green]✅ Completed {len(self.runs_data)}/{len(self.seeds)} seeds[/bold green]\n")
+        console.print(f"\n[bold green][OK] Completed {len(self.runs_data)}/{len(self.seeds)} seeds[/bold green]\n")
     
     def _execute_single_seed(self, seed: int) -> Dict:
         """Execute algorithm with specific seed and extract statistics."""
@@ -216,75 +216,91 @@ class BenchmarkRunner:
         return exp_dirs[0] / "final_pareto_historical.csv"
     
     def compute_statistics(self) -> pd.DataFrame:
-        """Compute min/max/mean/std across all seeds at each generation checkpoint."""
+        """Compute min/max/mean directly from ALL pareto front values across all seeds.
+        
+        Reports every REPORT_INTERVAL generations, but applies uniform sampling
+        to limit to maximum 10 rows per metric in final CSV.
+        """
         console.print("\n[bold blue]Computing Statistics[/bold blue]\n")
         
-        # Determine all columns from first run (skip non-numeric columns)
-        first_seed = list(self.runs_data.keys())[0]
-        first_gen = list(self.runs_data[first_seed].keys())[0]
-        all_cols = list(self.runs_data[first_seed][first_gen].keys())
+        # Find max generation across all seeds
+        max_gen = max(max(run_data.keys()) for run_data in self.runs_data.values())
         
-        # We want to aggregate all numeric columns (hypervolume, jaccard_min, jaccard_max, etc.)
-        numeric_cols = [col for col in all_cols]  # Keep all columns
+        # Collect all objective columns from pareto fronts
+        if not self.pareto_fronts:
+            self.logger.warning("No pareto fronts available")
+            return pd.DataFrame()
         
-        results = []
+        first_pareto = list(self.pareto_fronts.values())[0]
+        exclude_cols = {'rule', 'seed', 'generation', 'genome_hash', 'antecedent', 'consequent', 'encoded_rule', 'id'}
+        objective_cols = [col for col in first_pareto.columns 
+                         if col not in exclude_cols and pd.api.types.is_numeric_dtype(first_pareto[col])]
         
-        for target_gen in REPORT_GENERATIONS:
-            gen_data = defaultdict(list)
+        # First pass: collect ALL generations data
+        all_results = []
+        current_gen = REPORT_INTERVAL
+        while current_gen <= max_gen:
+            row = {'generation': current_gen}
             
-            # Collect data from all seeds
-            for seed, run_data in self.runs_data.items():
-                # Find closest generation (handle early stopping)
-                available_gens = sorted(run_data.keys())
+            # Collect ALL pareto values at this generation from all seeds
+            for obj_col in objective_cols:
+                all_values = []
                 
-                if target_gen in available_gens:
-                    gen = target_gen
-                elif target_gen > max(available_gens):
-                    # Early stopping: use last available
-                    gen = max(available_gens)
-                    self.logger.info(
-                        f"Seed {seed} stopped at gen {gen}, using for gen {target_gen}"
-                    )
-                else:
-                    # Find closest
-                    gen = min(available_gens, key=lambda x: abs(x - target_gen))
+                for seed, pareto_df in self.pareto_fronts.items():
+                    # Filter by generation (handle early stopping)
+                    available_gens = sorted(pareto_df['generation'].unique()) if 'generation' in pareto_df.columns else [max_gen]
+                    
+                    if current_gen in available_gens:
+                        gen = current_gen
+                    elif current_gen > max(available_gens):
+                        gen = max(available_gens)
+                    else:
+                        gen = min(available_gens, key=lambda x: abs(x - current_gen))
+                    
+                    gen_pareto = pareto_df[pareto_df['generation'] == gen] if 'generation' in pareto_df.columns else pareto_df
+                    
+                    if obj_col in gen_pareto.columns:
+                        all_values.extend(gen_pareto[obj_col].dropna().tolist())
                 
-                stats = run_data[gen]
-                # Collect each column value across seeds
-                for col in numeric_cols:
-                    if col in stats:
-                        gen_data[col].append(stats[col])
+                # Compute direct statistics from all values
+                if all_values:
+                    row[f"{obj_col}_min"] = float(np.min(all_values))
+                    row[f"{obj_col}_max"] = float(np.max(all_values))
+                    row[f"{obj_col}_mean"] = float(np.mean(all_values))
+                    row[f"{obj_col}_std"] = float(np.std(all_values))
             
-            # Compute statistics across seeds
-            row = {'generation': target_gen}
-            for col in numeric_cols:
-                if col in gen_data and len(gen_data[col]) > 0:
-                    values = gen_data[col]
-                    row[f"{col}_min"] = np.min(values)
-                    row[f"{col}_max"] = np.max(values)
-                    row[f"{col}_mean"] = np.mean(values)
-                    row[f"{col}_std"] = np.std(values)
-            
-            results.append(row)
+            all_results.append(row)
+            current_gen += REPORT_INTERVAL
         
-        df = pd.DataFrame(results)
+        full_df = pd.DataFrame(all_results)
         
-        # Save to CSV
+        # Second pass: apply uniform sampling (max 10 rows)
+        MAX_ROWS = 10
+        if len(full_df) <= MAX_ROWS:
+            sampled_df = full_df
+        else:
+            # Sample uniformly: indices spread across range
+            indices = np.linspace(0, len(full_df) - 1, MAX_ROWS, dtype=int)
+            sampled_df = full_df.iloc[indices].reset_index(drop=True)
+        
+        # Save sampled data to CSV
         csv_path = self.run_dir / "statistics_summary.csv"
-        df.to_csv(csv_path, index=False)
-        console.print(f"[green]✅ Statistics saved to: {csv_path}[/green]")
+        sampled_df.to_csv(csv_path, index=False)
+        console.print(f"[green][OK] Statistics saved to: {csv_path}[/green]")
         
-        return df
+        return sampled_df
     
     def generate_tables(self, stats_df: pd.DataFrame):
-        """Generate formatted tables for terminal display and save to file."""
+        """Generate formatted tables for terminal display and save to file.
+        
+        Displays sampled data from stats_df (already limited to max 10 rows).
+        Each metric shows min/max/mean values directly from ALL pareto fronts.
+        """
         console.print("\n[bold blue]Generating Tables[/bold blue]\n")
         
-        # Only show tables for key metrics (those that don't have double suffixes)
-        # e.g., 'hypervolume_min', not 'jaccard_min_min'
-        key_metrics = ['hypervolume'] + [col.replace('_mean', '') for col in stats_df.columns 
-                                          if col.endswith('_mean') and col.count('_') == 1]
-        key_metrics = list(set(key_metrics))
+        # Extract unique base metric names from columns ending with _min
+        key_metrics = sorted(list(set([col.replace('_min', '') for col in stats_df.columns 
+                                       if col.endswith('_min')])))
         
         # Create table per metric
         output_lines = []
@@ -295,7 +311,10 @@ class BenchmarkRunner:
         for metric in key_metrics:
             if f"{metric}_min" not in stats_df.columns:
                 continue
-                
+            
+            # Use ALL rows from sampled DataFrame (already limited to 10)
+            metric_rows = stats_df.to_dict('records')
+            
             # Rich table for console
             table = Table(title=f"{metric.upper()} Statistics", show_header=True, header_style="bold magenta")
             table.add_column("Generación", style="cyan", justify="center")
@@ -310,7 +329,7 @@ class BenchmarkRunner:
             output_lines.append(f"{'Generación':<15} {'min':<15} {'max':<15} {'Prom':<15} {'Prom(desv)':<15}")
             output_lines.append("-" * 80)
             
-            for _, row in stats_df.iterrows():
+            for row in metric_rows:
                 gen = int(row['generation'])
                 min_val = row[f"{metric}_min"]
                 max_val = row[f"{metric}_max"]
@@ -333,14 +352,12 @@ class BenchmarkRunner:
                 )
             
             console.print(table)
-            output_lines.append("")
-        
-        # Save to file
+            output_lines.append("")        # Save to file
         tables_file = self.run_dir / "tables_output.txt"
         with open(tables_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(output_lines))
         
-        console.print(f"\n[green]✅ Tables saved to: {tables_file}[/green]")
+        console.print(f"\n[green][OK] Tables saved to: {tables_file}[/green]")
     
     def find_top_rules(self):
         """Find top 3 rules per metric and knee point rule per scenario."""
@@ -358,7 +375,7 @@ class BenchmarkRunner:
             all_rules.append(pareto_df)
         
         if not all_rules:
-            console.print("[yellow]⚠️  No pareto fronts available[/yellow]")
+            console.print("[yellow][WARN] No pareto fronts available[/yellow]")
             return
         
         combined_df = pd.concat(all_rules, ignore_index=True)
@@ -369,14 +386,19 @@ class BenchmarkRunner:
         obj_cols = [col for col in combined_df.columns 
                    if col not in exclude_cols and pd.api.types.is_numeric_dtype(combined_df[col])]
         
-        # Top 3 per metric
+        # Top 3 per metric (deduplicated by rule text)
         for metric in obj_cols:
             output_lines.append(f"\n{'─'*80}")
             output_lines.append(f"TOP 3 RULES - {metric.upper()}")
             output_lines.append(f"{'─'*80}")
             
-            # Sort by metric (ascending for minimization in pymoo)
-            top_3 = combined_df.nsmallest(3, metric)
+            # Sort by metric (nlargest because we want BEST = HIGHEST after negation reversal)
+            # In pymoo we negate, so the output CSVs have the REAL values (higher is better)
+            sorted_df = combined_df.sort_values(metric, ascending=False)
+            
+            # Deduplicate by rule text, keep first (best) occurrence
+            unique_rules = sorted_df.drop_duplicates(subset=['rule'], keep='first')
+            top_3 = unique_rules.head(3)
             
             for i, (_, row) in enumerate(top_3.iterrows(), 1):
                 output_lines.append(f"\n#{i} (Seed {row['seed']}, {metric}={row[metric]:.4f})")
@@ -387,7 +409,7 @@ class BenchmarkRunner:
                                     if isinstance(row[obj], (int, float, np.number))])
                 output_lines.append(f"  Objectives: {obj_str}")
             
-            console.print(f"[cyan]✅ Top 3 for {metric}[/cyan]")
+            console.print(f"[cyan][OK] Top 3 for {metric}[/cyan]")
         
         # Knee point (best trade-off)
         output_lines.append(f"\n{'='*80}")
@@ -398,21 +420,22 @@ class BenchmarkRunner:
         
         if knee_rule is not None:
             output_lines.append(f"\nSeed: {knee_rule['seed']}")
-            output_lines.append(f"Rule: {knee_rule.get('decoded_rule', 'N/A')}")
-            obj_str = ", ".join([f"{obj}={knee_rule[obj]:.4f}" for obj in obj_cols])
+            output_lines.append(f"Rule: {knee_rule.get('rule', 'N/A')}")
+            obj_str = ", ".join([f"{obj}={knee_rule[obj]:.4f}" for obj in obj_cols 
+                                if isinstance(knee_rule[obj], (int, float, np.number))])
             output_lines.append(f"Objectives: {obj_str}")
             
-            console.print("[green]✅ Knee point identified[/green]")
+            console.print("[green][OK] Knee point identified[/green]")
         else:
-            output_lines.append("\n⚠️  Could not identify knee point")
-            console.print("[yellow]⚠️  Could not identify knee point[/yellow]")
+            output_lines.append("\n[WARN] Could not identify knee point")
+            console.print("[yellow][WARN] Could not identify knee point[/yellow]")
         
         # Save to file
         rules_file = self.run_dir / "top_rules.txt"
         with open(rules_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(output_lines))
         
-        console.print(f"\n[green]✅ Top rules saved to: {rules_file}[/green]")
+        console.print(f"\n[green][OK] Top rules saved to: {rules_file}[/green]")
     
     def _find_knee_point(self, pareto_df: pd.DataFrame, obj_cols: List[str]) -> Optional[pd.Series]:
         """
@@ -452,25 +475,14 @@ class BenchmarkRunner:
         """Identify seed closest to median hypervolume performance."""
         console.print("\n[bold blue]Finding Median Seed[/bold blue]\n")
         
-        # Compute average hypervolume per seed across all checkpoints
+        # Use final hypervolume per seed (last generation available)
         seed_hvs = {}
         
         for seed in self.runs_data.keys():
-            hvs = []
-            for target_gen in REPORT_GENERATIONS:
-                run_data = self.runs_data[seed]
-                available_gens = sorted(run_data.keys())
-                
-                if target_gen in available_gens:
-                    gen = target_gen
-                elif target_gen > max(available_gens):
-                    gen = max(available_gens)
-                else:
-                    gen = min(available_gens, key=lambda x: abs(x - target_gen))
-                
-                hvs.append(run_data[gen]['hypervolume'])
-            
-            seed_hvs[seed] = np.mean(hvs)
+            run_data = self.runs_data[seed]
+            # Get last generation
+            last_gen = max(run_data.keys())
+            seed_hvs[seed] = run_data[last_gen]['hypervolume']
         
         # Find median
         median_hv = np.median(list(seed_hvs.values()))
@@ -498,7 +510,7 @@ class BenchmarkRunner:
         with open(median_file, 'w', encoding='utf-8') as f:
             f.write(output_text)
         
-        console.print(f"\n[green]✅ Median seed analysis saved to: {median_file}[/green]")
+        console.print(f"\n[green][OK] Median seed analysis saved to: {median_file}[/green]")
     
     def run_full_analysis(self):
         """Execute complete benchmark workflow."""
@@ -507,7 +519,7 @@ class BenchmarkRunner:
             self.run_all_seeds()
             
             if not self.runs_data:
-                console.print("[red]❌ No successful runs. Aborting.[/red]")
+                console.print("[red][FAIL] No successful runs. Aborting.[/red]")
                 return
             
             # 2. Compute statistics
@@ -524,7 +536,7 @@ class BenchmarkRunner:
             
             # Final summary
             console.print(Panel(
-                f"[bold green]✅ Benchmark Complete![/bold green]\n\n"
+                f"[bold green][OK] Benchmark Complete![/bold green]\n\n"
                 f"Results saved to: {self.run_dir}\n"
                 f"- statistics_summary.csv\n"
                 f"- tables_output.txt\n"
@@ -537,7 +549,7 @@ class BenchmarkRunner:
             
         except Exception as e:
             self.logger.error(f"Benchmark failed: {e}", exc_info=True)
-            console.print(f"[red]❌ Benchmark failed: {e}[/red]")
+            console.print(f"[red][FAIL] Benchmark failed: {e}[/red]")
             raise
 
 

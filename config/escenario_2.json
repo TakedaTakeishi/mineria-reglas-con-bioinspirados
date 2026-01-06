@@ -3,7 +3,7 @@
     "name": "MOEAD_ARM_Diabetes_Scenario_2",
     "description": "Optimización de reglas de asociación usando MOEA/D. Escenario 2: Maximizar Jaccard, Coseno, Phi, Kappa",
     "scenario": "scenario_2",
-    "random_seed": 3,
+    "random_seed": 42,
     "output_root": "results"
   },
   "use_sampling": false,
@@ -21,7 +21,7 @@
       "max_attempts": 5000
     },
     "decomposition": {
-      "method": "pbi",
+      "method": "tchebycheff",
       "params": { "theta": 5.0 }
     },
     "neighborhood": {

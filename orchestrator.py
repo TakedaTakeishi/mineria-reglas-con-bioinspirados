@@ -93,10 +93,10 @@ class Orchestrator:
         }
 
     def run(self):
-        # 🎲 CRÍTICO: Setear seed de NumPy ANTES de cualquier operación
+        # [SEED] CRÍTICO: Setear seed de NumPy ANTES de cualquier operación
         random_seed = self.config['experiment']['random_seed']
         np.random.seed(random_seed)
-        print(f"🎲 Random seed set to: {random_seed}")
+        print(f"[SEED] Random seed set to: {random_seed}")
         
         # Setup output directory
         output_root = self.config['experiment'].get('output_root', 'results')
