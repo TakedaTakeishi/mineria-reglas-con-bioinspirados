@@ -82,7 +82,7 @@
     },
     "exclusions": {
       "fixed_antecedents": ["diabetes"],
-      "fixed_consequents": ["age", "bmi"],
+      "fixed_consequents": ["age", "bmi", "race", "gender"],
       "forbidden_pairs": [
         ["age", "bmi"],
         ["blood_glucose_level", "diabetes"],

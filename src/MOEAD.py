@@ -443,8 +443,7 @@ class MOEAD_ARM:
             )
         
         crossover = DiploidNPointCrossover(
-            prob=alg_config['operators']['crossover']['probability']['initial'],
-            n_points=2
+            prob=alg_config['operators']['crossover']['probability']['initial']
         )
         
         # Create mutation using factory

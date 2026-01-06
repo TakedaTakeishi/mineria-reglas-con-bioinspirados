@@ -10,9 +10,11 @@ class DiploidNPointCrossover(Crossover):
     N-Point crossover for diploid individuals (refactored).
     
     Preserves vertical gene structure (role + value stay together).
+
+    N-points are randomly selected between 1 and the length of the genome - 1.
     """
     
-    def __init__(self, n_points: int = 2, prob: float = 0.9, **kwargs):
+    def __init__(self, prob: float = 0.9, **kwargs):
         """
         Initialize crossover operator.
         
@@ -22,7 +24,6 @@ class DiploidNPointCrossover(Crossover):
             **kwargs: Additional pymoo arguments
         """
         super().__init__(2, 2, **kwargs)
-        self.n_points = n_points
         self.prob = prob
     
     def _do(self, problem, X, **kwargs):
@@ -50,9 +51,8 @@ class DiploidNPointCrossover(Crossover):
             
             # Select random number of cut points (1 to n_genes-1)
             if n_genes > 1:
-                # Random number of points between 1 and min(self.n_points, n_genes-1)
-                max_points = min(self.n_points, n_genes - 1)
-                actual_n_points = np.random.randint(1, max_points + 1)
+                # Random number of points between 1 and n_genes-1 (fully random)
+                actual_n_points = np.random.randint(1, n_genes)
                 
                 cut_points = np.sort(
                     np.random.choice(

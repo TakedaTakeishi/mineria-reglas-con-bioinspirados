@@ -96,7 +96,7 @@ def test_diploid_crossover():
     """Test diploid n-point crossover."""
     print("Testing DiploidNPointCrossover...")
     
-    crossover = DiploidNPointCrossover(n_points=2, prob=1.0)
+    crossover = DiploidNPointCrossover(prob=1.0)
     
     # Create mock problem
     class MockProblem:
